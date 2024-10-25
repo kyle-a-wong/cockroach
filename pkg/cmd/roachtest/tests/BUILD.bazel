@@ -55,6 +55,7 @@ go_library(
         "copy.go",
         "copyfrom.go",
         "costfuzz.go",
+        "db_console.go",
         "decommission.go",
         "decommission_self.go",
         "decommissionbench.go",
