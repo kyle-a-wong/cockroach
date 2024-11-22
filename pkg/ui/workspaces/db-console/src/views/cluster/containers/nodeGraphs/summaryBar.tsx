@@ -91,7 +91,7 @@ export interface ClusterSummaryProps {
   tenantSource?: string;
 }
 
-export default function (props: ClusterSummaryProps) {
+export default function(props: ClusterSummaryProps) {
   const { Bytes } = util;
   const nodeSums = useSelector(nodeSumsSelector);
   // Capacity math used in the summary status section.

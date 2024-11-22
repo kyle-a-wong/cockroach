@@ -37,6 +37,19 @@ const cx = classNames.bind(styles);
 const HotRangesRequest = cockroach.server.serverpb.HotRangesRequest;
 type HotRange = cockroach.server.serverpb.HotRangesResponseV2.IHotRange;
 
+const mean = (array: number[]) =>
+  array.reduce((a: number, b: number) => a + b) / array.length;
+
+function stddev(array: number[]) {
+  const n = array.length;
+  const avg = mean(array);
+  return Math.sqrt(
+    array
+      .map(x => Math.pow(x - avg, 2))
+      .reduce((a: number, b: number) => a + b) / n,
+  );
+}
+
 const HotRangesPage = () => {
   const dispatch = useDispatch();
   const hotRanges = useSelector(hotRangesSelector);

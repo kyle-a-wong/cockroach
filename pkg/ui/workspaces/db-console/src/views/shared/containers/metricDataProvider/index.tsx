@@ -288,7 +288,7 @@ const timeInfoSelector = createSelector(
   },
 );
 
-const current = () => {
+export const current = () => {
   let now = moment();
   // Round to the nearest 10 seconds. There are 10000 ms in 10 s.
   now = moment(Math.floor(now.valueOf() / 10000) * 10000);

@@ -93,6 +93,7 @@ import TransactionInsightDetailsPage from "./views/insights/transactionInsightDe
 import { JwtAuthTokenPage } from "./views/jwt/jwtAuthToken";
 import ActiveStatementDetails from "./views/statements/activeStatementDetailsConnected";
 import ActiveTransactionDetails from "./views/transactions/activeTransactionDetailsConnected";
+import HotspotsExperiment from "./views/hotspots/experiment";
 
 // NOTE: If you are adding a new path to the router, and that path contains any
 // components that are personally identifying information, you MUST update the
@@ -470,6 +471,11 @@ export const App: React.FC<AppProps> = (props: AppProps) => {
                           exact
                           path={`/reports/statements/diagnosticshistory`}
                           component={StatementsDiagnosticsHistoryView}
+                        />
+                        <Route
+                          exact
+                          path={`/hotspotsexperiment`}
+                          component={HotspotsExperiment}
                         />
                         {/* hot ranges */}
                         <Route

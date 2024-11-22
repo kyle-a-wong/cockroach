@@ -7,6 +7,7 @@ import classNames from "classnames";
 import isNumber from "lodash/isNumber";
 import last from "lodash/last";
 import sum from "lodash/sum";
+import mean from "lodash/mean";
 import React from "react";
 
 import { InfoTooltip } from "src/components/infoTooltip";
@@ -21,6 +22,8 @@ type TSResponse = protos.cockroach.ts.tspb.TimeSeriesQueryResponse;
 export enum SummaryMetricsAggregator {
   FIRST = 1,
   SUM = 2,
+  MEAN = 3,
+  MAX = 4,
 }
 
 interface SummaryValueProps {
@@ -200,7 +203,7 @@ function SummaryMetricStatHelper(
   );
 }
 
-function aggregateLatestValuesFromMetrics(
+export function aggregateLatestValuesFromMetrics(
   data?: TSResponse,
   aggregator?: SummaryMetricsAggregator,
 ) {
@@ -216,6 +219,10 @@ function aggregateLatestValuesFromMetrics(
     switch (aggregator) {
       case SummaryMetricsAggregator.SUM:
         return sum(latestValues);
+      case SummaryMetricsAggregator.MAX:
+        return Math.max(...latestValues);
+      case SummaryMetricsAggregator.MEAN:
+        return mean(latestValues);
       case SummaryMetricsAggregator.FIRST:
       default:
         // Do nothing, which does default action (below) of

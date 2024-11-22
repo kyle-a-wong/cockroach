@@ -288,7 +288,7 @@ function timeoutFetch<
   TResponse$Properties,
   TResponse,
   TResponseBuilder extends {
-    new (properties?: TResponse$Properties): TResponse;
+    new(properties?: TResponse$Properties): TResponse;
     encode(
       message: TResponse$Properties,
       writer?: protobuf.Writer,
