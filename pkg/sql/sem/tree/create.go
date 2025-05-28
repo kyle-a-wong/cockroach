@@ -23,7 +23,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/lexbase"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgcode"
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/collatedstring"
 	"github.com/cockroachdb/cockroach/pkg/util/pretty"
@@ -224,6 +223,14 @@ func (l *IndexElemList) doc(p *PrettyCfg) pretty.Doc {
 	return p.commaSeparated(d...)
 }
 
+type IndexType uint8
+
+const (
+	IndexTypeForward IndexType = iota
+	IndexTypeInverted
+	IndexTypeVector
+)
+
 type IndexInvisibility struct {
 	Value         float64
 	FloatProvided bool
@@ -234,7 +241,8 @@ type CreateIndex struct {
 	Name        Name
 	Table       TableName
 	Unique      bool
-	Type        idxtype.T
+	Inverted    bool
+	Vector      bool
 	IfNotExists bool
 	Columns     IndexElemList
 	Sharded     *ShardedIndexDef
@@ -257,10 +265,10 @@ func (node *CreateIndex) Format(ctx *FmtCtx) {
 	if node.Unique {
 		ctx.WriteString("UNIQUE ")
 	}
-	switch node.Type {
-	case idxtype.INVERTED:
+	if node.Inverted {
 		ctx.WriteString("INVERTED ")
-	case idxtype.VECTOR:
+	}
+	if node.Vector {
 		ctx.WriteString("VECTOR ")
 	}
 	ctx.WriteString("INDEX ")
@@ -370,7 +378,7 @@ type CreateType struct {
 	Variety  CreateTypeVariety
 	// EnumLabels is set when this represents a CREATE TYPE ... AS ENUM statement.
 	EnumLabels EnumValueList
-	// CompositeTypeList is set when this represents a CREATE TYPE ... AS ( )
+	// CompositeTypeList is set when this repesnets a CREATE TYPE ... AS ( )
 	// statement.
 	CompositeTypeList []CompositeTypeElem
 	// IfNotExists is true if IF NOT EXISTS was requested.
@@ -1034,7 +1042,8 @@ type IndexTableDef struct {
 	Columns          IndexElemList
 	Sharded          *ShardedIndexDef
 	Storing          NameList
-	Type             idxtype.T
+	Inverted         bool
+	Vector           bool
 	PartitionByIndex *PartitionByIndex
 	StorageParams    StorageParams
 	Predicate        Expr
@@ -1043,10 +1052,10 @@ type IndexTableDef struct {
 
 // Format implements the NodeFormatter interface.
 func (node *IndexTableDef) Format(ctx *FmtCtx) {
-	switch node.Type {
-	case idxtype.INVERTED:
+	if node.Inverted {
 		ctx.WriteString("INVERTED ")
-	case idxtype.VECTOR:
+	}
+	if node.Vector {
 		ctx.WriteString("VECTOR ")
 	}
 	ctx.WriteString("INDEX ")
@@ -2009,7 +2018,6 @@ type RefreshMaterializedView struct {
 	Name              *UnresolvedObjectName
 	Concurrently      bool
 	RefreshDataOption RefreshDataOption
-	AsOf              AsOfClause
 }
 
 // RefreshDataOption corresponds to arguments for the REFRESH MATERIALIZED VIEW
@@ -2035,10 +2043,6 @@ func (node *RefreshMaterializedView) Format(ctx *FmtCtx) {
 		ctx.WriteString("CONCURRENTLY ")
 	}
 	ctx.FormatNode(node.Name)
-	if node.AsOf.Expr != nil {
-		ctx.WriteString(" ")
-		ctx.FormatNode(&node.AsOf)
-	}
 	switch node.RefreshDataOption {
 	case RefreshDataWithData:
 		ctx.WriteString(" WITH DATA")

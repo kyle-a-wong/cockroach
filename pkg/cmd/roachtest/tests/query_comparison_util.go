@@ -385,7 +385,7 @@ func runOneRoundQueryComparison(
 				// Initialize a new mutating smither that generates INSERT, UPDATE and
 				// DELETE statements with the MutationsOnly option.
 				mutatingSmither = newMutatingSmither(conn, rnd, t, false /* disableDelete */, qct.isMultiRegion)
-				defer mutatingSmither.Close() //nolint:deferloop
+				defer mutatingSmither.Close()
 			}
 
 			if i%numInitialMutations == 0 {
@@ -620,18 +620,9 @@ func isFloatArray(colType string) bool {
 	}
 }
 
-func isDecimal(colType string) bool {
-	switch colType {
-	case "DECIMAL", "NUMERIC":
-		return true
-	default:
-		return false
-	}
-}
-
 func isDecimalArray(colType string) bool {
 	switch colType {
-	case "[]DECIMAL", "_DECIMAL", "[]NUMERIC", "_NUMERIC":
+	case "[]DECIMAL", "_DECIMAL":
 		return true
 	default:
 		return false
@@ -642,7 +633,7 @@ func needApproximateMatch(colType string) bool {
 	// On s390x, check that values for both float and decimal coltypes are
 	// approximately equal to take into account platform differences in floating
 	// point calculations. On other architectures, check float values only.
-	return (runtime.GOARCH == "s390x" && (isDecimal(colType) || isDecimalArray(colType))) ||
+	return (runtime.GOARCH == "s390x" && (colType == "DECIMAL" || isDecimalArray(colType))) ||
 		colType == "FLOAT4" || colType == "FLOAT8" || isFloatArray(colType)
 }
 
@@ -723,7 +714,7 @@ func unsortedMatricesDiffWithFloatComp(
 	}
 	var needCustomMatch bool
 	for _, colType := range colTypes {
-		if needApproximateMatch(colType) || isDecimal(colType) || isDecimalArray(colType) {
+		if needApproximateMatch(colType) || colType == "DECIMAL" || isDecimalArray(colType) {
 			needCustomMatch = true
 			break
 		}
@@ -757,7 +748,7 @@ func unsortedMatricesDiffWithFloatComp(
 				}
 			} else {
 				switch {
-				case isDecimal(colType):
+				case colType == "DECIMAL":
 					// For decimals, remove any trailing zeroes.
 					row1[j] = trimDecimalTrailingZeroes(row1[j])
 					row2[j] = trimDecimalTrailingZeroes(row2[j])

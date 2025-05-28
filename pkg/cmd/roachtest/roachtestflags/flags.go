@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
-	"github.com/cockroachdb/cockroach/pkg/roachprod/vm"
 	"github.com/cockroachdb/cockroach/pkg/util/randutil"
 	"github.com/spf13/pflag"
 )
@@ -328,12 +327,6 @@ var (
 		Usage: `flag to denote if roachtest should export openmetrics file for performance metrics.`,
 	})
 
-	OpenmetricsLabels string = ""
-	_                        = registerRunFlag(&OpenmetricsLabels, FlagInfo{
-		Name:  "openmetrics-labels",
-		Usage: `flag to pass custom labels to pass to openmetrics for performance metrics,`,
-	})
-
 	DatadogSite string = "us5.datadoghq.com"
 	_                  = registerRunOpsFlag(&DatadogSite, FlagInfo{
 		Name:  "datadog-site",
@@ -395,6 +388,15 @@ var (
 		Name: "workload-cluster",
 		Usage: "Specify the name of the workload cluster. The workload cluster is the one running operations and " +
 			"workloads, such as TPC-C, on the cluster",
+	})
+
+	SideEyeApiToken string = ""
+	_                      = registerRunFlag(&SideEyeApiToken, FlagInfo{
+		Name: "side-eye-token",
+		Usage: `The API token to use for configuring the Side-Eye agents running on the
+						created clusters. If empty, the Side-Eye agents will not be started.
+						When set, app.side-eye.io can be used to monitor running clusters and also
+						timing out tests will get a snapshot before their clusters are destroyed.`,
 	})
 
 	PreferLocalSSD bool = true
@@ -582,9 +584,6 @@ func AddListFlags(cmdFlags *pflag.FlagSet) {
 // command flag set.
 func AddRunFlags(cmdFlags *pflag.FlagSet) {
 	globalMan.AddFlagsToCommand(runCmdID, cmdFlags)
-	for _, provider := range vm.Providers {
-		provider.ConfigureProviderFlags(cmdFlags, vm.SingleProject)
-	}
 }
 
 // AddRunOpsFlags adds all flags registered for the run-operations command to

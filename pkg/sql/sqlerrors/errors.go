@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/cockroach/pkg/build"
-	"github.com/cockroachdb/cockroach/pkg/docs"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catpb"
@@ -21,7 +20,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgerror"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
@@ -314,7 +312,7 @@ func NewDependentObjectErrorf(format string, args ...interface{}) error {
 func NewDependentBlocksOpError(op, objType, objName, dependentType, dependentName string) error {
 	return errors.WithHintf(
 		NewDependentObjectErrorf("cannot %s %s %q because %s %q depends on it",
-			redact.SafeString(op), redact.SafeString(objType), objName, redact.SafeString(dependentType), dependentName),
+			op, objType, objName, dependentType, dependentName),
 		"consider dropping %q first.", dependentName)
 }
 
@@ -374,17 +372,6 @@ func NewAlterDependsOnExpirationExprError(
 		),
 		"use ALTER TABLE %s SET (ttl_expiration_expression = ...) to change the expression",
 		tabName,
-	)
-}
-
-// NewAlterDependsOnPolicyExprError generates an error when a column change
-// is prevented because the column is referenced in a row-level security
-// policy expression.
-func NewAlterDependsOnPolicyExprError(op, objType, colName string) error {
-	return pgerror.Newf(
-		pgcode.InvalidTableDefinition,
-		`cannot %s %s %q because it is referenced in a policy expression`,
-		redact.SafeString(op), redact.SafeString(objType), colName,
 	)
 }
 
@@ -512,41 +499,6 @@ func NewInsufficientPrivilegeOnDescriptorError(
 	return pgerror.Newf(pgcode.InsufficientPrivilege,
 		"user %s does not have %s privilege on %s %s",
 		user, privsStr, descType, descName)
-}
-
-// NewColumnNotIndexableError returns an error for a column type that cannot be
-// indexed.
-func NewColumnNotIndexableError(colDesc string, colType string, detail string) error {
-	return unimplemented.NewWithIssueDetailf(35730,
-		detail, "column %s has type %s, which is not indexable", colDesc, colType)
-}
-
-// NewInvalidLastColumnError returns an error for the type of the last column in
-// an inverted or vector index.
-func NewInvalidLastColumnError(colDesc, colType string, indexType idxtype.T) error {
-	err := pgerror.Newf(
-		pgcode.FeatureNotSupported,
-		"column %s has type %s, which is not allowed as the last column in %s",
-		colDesc, colType, idxtype.ErrorText(indexType))
-	if indexType == idxtype.INVERTED {
-		err = errors.WithHint(err,
-			"see the documentation for more information about inverted indexes: "+docs.URL("inverted-indexes.html"))
-	}
-	return err
-}
-
-// NewColumnOnlyIndexableError returns an error for a column with a type that
-// can only be indexed as the last column in an inverted or vector index.
-func NewColumnOnlyIndexableError(colDesc string, colType string, indexType idxtype.T) error {
-	err := pgerror.Newf(
-		pgcode.FeatureNotSupported,
-		"column %s has type %s, which is only allowed as the last column in %s",
-		colDesc, colType, idxtype.ErrorText(indexType))
-	if indexType == idxtype.INVERTED {
-		err = errors.WithHint(err,
-			"see the documentation for more information about inverted indexes: "+docs.URL("inverted-indexes.html"))
-	}
-	return err
 }
 
 // QueryTimeoutError is an error representing a query timeout.

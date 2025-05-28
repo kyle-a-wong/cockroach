@@ -191,10 +191,6 @@ const (
 	// FmtShowFullURIs instructs the pretty-printer to not sanitize URIs. If not
 	// set, URIs are sanitized to prevent leaking secrets.
 	FmtShowFullURIs
-
-	// FmtSkipAsOfSystemTimeClauses prevents the formatter from printing AS OF
-	// SYSTEM TIME clauses.
-	FmtSkipAsOfSystemTimeClauses
 )
 
 const genericArityIndicator = "__more__"
@@ -610,8 +606,6 @@ func (ctx *FmtCtx) FormatURI(uri Expr) {
 // FormatNode recurses into a node for pretty-printing.
 // Flag-driven special cases can hook into this.
 func (ctx *FmtCtx) FormatNode(n NodeFormatter) {
-	// TODO(yuzefovich): consider adding a panic-catcher here and propagating
-	// the caught panics as return parameters.
 	f := ctx.flags
 	if f.HasFlags(FmtShowTypes) {
 		if te, ok := n.(TypedExpr); ok {

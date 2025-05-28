@@ -9,7 +9,6 @@ import (
 	sql "database/sql"
 	fs "io/fs"
 	reflect "reflect"
-	time "time"
 
 	grafana "github.com/cockroachdb/cockroach/pkg/cmd/roachprod/grafana"
 	cluster "github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
@@ -143,6 +142,20 @@ func (m *MockCluster) CRDBNodes() option.NodeListOption {
 func (mr *MockClusterMockRecorder) CRDBNodes() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CRDBNodes", reflect.TypeOf((*MockCluster)(nil).CRDBNodes))
+}
+
+// CaptureSideEyeSnapshot mocks base method.
+func (m *MockCluster) CaptureSideEyeSnapshot(arg0 context.Context) string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CaptureSideEyeSnapshot", arg0)
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// CaptureSideEyeSnapshot indicates an expected call of CaptureSideEyeSnapshot.
+func (mr *MockClusterMockRecorder) CaptureSideEyeSnapshot(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CaptureSideEyeSnapshot", reflect.TypeOf((*MockCluster)(nil).CaptureSideEyeSnapshot), arg0)
 }
 
 // Cloud mocks base method.
@@ -602,20 +615,6 @@ func (mr *MockClusterMockRecorder) Nodes(arg0 ...interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockCluster)(nil).Nodes), arg0...)
 }
 
-// PopulateEtcHosts mocks base method.
-func (m *MockCluster) PopulateEtcHosts(arg0 context.Context, arg1 *logger.Logger) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PopulateEtcHosts", arg0, arg1)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// PopulateEtcHosts indicates an expected call of PopulateEtcHosts.
-func (mr *MockClusterMockRecorder) PopulateEtcHosts(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PopulateEtcHosts", reflect.TypeOf((*MockCluster)(nil).PopulateEtcHosts), arg0, arg1)
-}
-
 // Put mocks base method.
 func (m *MockCluster) Put(arg0 context.Context, arg1, arg2 string, arg3 ...option.Option) {
 	m.ctrl.T.Helper()
@@ -725,18 +724,6 @@ func (m *MockCluster) Reformat(arg0 context.Context, arg1 *logger.Logger, arg2 o
 func (mr *MockClusterMockRecorder) Reformat(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Reformat", reflect.TypeOf((*MockCluster)(nil).Reformat), arg0, arg1, arg2, arg3)
-}
-
-// RegisterClusterHook mocks base method.
-func (m *MockCluster) RegisterClusterHook(arg0 string, arg1 option.ClusterHookType, arg2 time.Duration, arg3 func(context.Context) error) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "RegisterClusterHook", arg0, arg1, arg2, arg3)
-}
-
-// RegisterClusterHook indicates an expected call of RegisterClusterHook.
-func (mr *MockClusterMockRecorder) RegisterClusterHook(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RegisterClusterHook", reflect.TypeOf((*MockCluster)(nil).RegisterClusterHook), arg0, arg1, arg2, arg3)
 }
 
 // Run mocks base method.

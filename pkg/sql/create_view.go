@@ -58,11 +58,6 @@ type createViewNode struct {
 	// depends on. This is collected during the construction of
 	// the view query's logical plan.
 	typeDeps typeDependencies
-
-	// funcDeps tracks which user-defined functions the view being created
-	// depends on. This is collected during the construction of
-	// the view query's logical plan.
-	funcDeps functionDependencies
 }
 
 // ReadingOwnWrites implements the planNodeReadingOwnWrites interface.
@@ -217,29 +212,12 @@ func (n *createViewNode) startExec(params runParams) error {
 				if err != nil {
 					return err
 				}
-				// creationTime is usually initialized to a zero value and populated at
-				// read time. See the comment in desc.MaybeIncrementVersion. However,
-				// for CREATE MATERIALIZED VIEW ... AS OF SYSTEM TIME, we need to set
-				// the creation time to the specified timestamp.
+				// creationTime is initialized to a zero value and populated at read time.
+				// See the comment in desc.MaybeIncrementVersion.
+				//
+				// TODO(ajwerner): remove the timestamp from MakeViewTableDesc, it's
+				// currently relied on in import and restore code and tests.
 				var creationTime hlc.Timestamp
-				if asOf := params.p.extendedEvalCtx.AsOfSystemTime; asOf != nil && asOf.ForBackfill && n.createView.Materialized {
-					creationTime = asOf.Timestamp
-
-					var mostRecentModTime hlc.Timestamp
-					for _, mut := range backRefMutables {
-						if mut.ModificationTime.After(mostRecentModTime) {
-							mostRecentModTime = mut.ModificationTime
-						}
-					}
-
-					if creationTime.Less(mostRecentModTime) {
-						return pgerror.Newf(
-							pgcode.InvalidTableDefinition,
-							"timestamp %s is before the most recent modification time of the tables the view depends on (%s)",
-							creationTime, mostRecentModTime,
-						)
-					}
-				}
 				desc, err := makeViewTableDesc(
 					params.ctx,
 					viewName,
@@ -298,14 +276,6 @@ func (n *createViewNode) startExec(params runParams) error {
 					orderedTypeDeps.Add(backrefID)
 				}
 				desc.DependsOnTypes = append(desc.DependsOnTypes, orderedTypeDeps.Ordered()...)
-
-				// Collect all functions this view depends on.
-				orderedFuncDeps := catalog.DescriptorIDSet{}
-				for backrefID := range n.funcDeps {
-					orderedFuncDeps.Add(backrefID)
-				}
-				desc.DependsOnFunctions = append(desc.DependsOnFunctions, orderedFuncDeps.Ordered()...)
-
 				newDesc = &desc
 
 				if err = params.p.createDescriptor(

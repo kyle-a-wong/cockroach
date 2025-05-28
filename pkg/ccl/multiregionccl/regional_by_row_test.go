@@ -174,7 +174,6 @@ func TestAlterTableLocalityRegionalByRowError(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)
 	skip.UnderRace(t, "takes >400s under race")
-	skip.UnderDeadlock(t, "skipping as per issue #146428")
 
 	var chunkSize int64 = 100
 	var maxValue = 4000
@@ -328,7 +327,7 @@ func TestAlterTableLocalityRegionalByRowError(t *testing.T) {
 						job_type = 'SCHEMA CHANGE' AND
 						status = $1 AND
 						description NOT LIKE 'ROLL BACK%'
-				)`, jobs.StateRunning)
+				)`, jobs.StatusRunning)
 								return err
 							},
 							errorContains: "job canceled by user",

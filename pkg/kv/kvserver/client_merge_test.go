@@ -40,7 +40,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/rditer"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/stateloader"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/txnwait"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvtestutils"
 	"github.com/cockroachdb/cockroach/pkg/raft/raftpb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/rpc"
@@ -760,7 +759,8 @@ func mergeCheckingTimestampCaches(
 					// Loosely-coupled truncation requires an engine flush to advance
 					// guaranteed durability.
 					require.NoError(t, r.Store().TODOEngine().Flush())
-					if firstIndex := r.GetCompactedIndex() + 1; firstIndex < truncIndex {
+					firstIndex := r.GetFirstIndex()
+					if firstIndex < truncIndex {
 						return errors.Errorf("truncate not applied, %d < %d", firstIndex, truncIndex)
 					}
 				}
@@ -2553,12 +2553,21 @@ func TestStoreReplicaGCAfterMerge(t *testing.T) {
 
 	// Be extra paranoid and verify the exact value of the replica tombstone.
 	checkTombstone := func(eng storage.Engine) {
-		ts, err := stateloader.Make(rhsDesc.RangeID).LoadRangeTombstone(ctx, eng)
-		require.NoError(t, err)
-		require.Equal(t, roachpb.ReplicaID(math.MaxInt32), ts.NextReplicaID)
+		var rhsTombstone kvserverpb.RangeTombstone
+		rhsTombstoneKey := keys.RangeTombstoneKey(rhsDesc.RangeID)
+		ok, err = storage.MVCCGetProto(ctx, eng, rhsTombstoneKey, hlc.Timestamp{},
+			&rhsTombstone, storage.MVCCGetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		} else if !ok {
+			t.Fatalf("missing range tombstone at key %s", rhsTombstoneKey)
+		}
+		if e, a := roachpb.ReplicaID(math.MaxInt32), rhsTombstone.NextReplicaID; e != a {
+			t.Fatalf("expected next replica ID to be %d, but got %d", e, a)
+		}
 	}
-	checkTombstone(store0.StateEngine())
-	checkTombstone(store1.StateEngine())
+	checkTombstone(store0.TODOEngine())
+	checkTombstone(store1.TODOEngine())
 }
 
 // TestStoreRangeMergeAddReplicaRace verifies that when an add replica request
@@ -3896,15 +3905,11 @@ func TestStoreRangeMergeRaftSnapshot(t *testing.T) {
 		}
 		keySpans := rditer.MakeReplicatedKeySpans(inSnap.Desc)
 		sstFileWriters := map[string]sstFileWriter{}
-		for i, span := range keySpans {
+		for _, span := range keySpans {
 			file := &storage.MemObject{}
 			writer := storage.MakeIngestionSSTWriter(ctx, st, file)
-			if i < len(keySpans)-1 {
-				// The last span is the MVCC span, and is always cleared via Excise.
-				// See MultiSSTWriter.
-				if err := writer.ClearRawRange(span.Key, span.EndKey, true /* pointKeys */, true /* rangeKeys */); err != nil {
-					return err
-				}
+			if err := writer.ClearRawRange(span.Key, span.EndKey, true /* pointKeys */, true /* rangeKeys */); err != nil {
+				return err
 			}
 			sstFileWriters[string(span.Key)] = sstFileWriter{
 				span:   span,
@@ -3991,13 +3996,15 @@ func TestStoreRangeMergeRaftSnapshot(t *testing.T) {
 				require.NoError(t, sst.ClearRawRange(keys.RaftHardStateKey(rangeID), s.EndKey, true, false))
 			}
 
-			if err := stateloader.Make(rangeID).SetRangeTombstone(
-				context.Background(), &sst,
-				kvserverpb.RangeTombstone{NextReplicaID: math.MaxInt32},
+			tombstoneKey := keys.RangeTombstoneKey(rangeID)
+			tombstoneValue := &kvserverpb.RangeTombstone{NextReplicaID: math.MaxInt32}
+			if err := storage.MVCCBlindPutProto(
+				context.Background(), &sst, tombstoneKey, hlc.Timestamp{}, tombstoneValue, storage.MVCCWriteOptions{},
 			); err != nil {
 				return err
 			}
-			if err := sst.Finish(); err != nil {
+			err := sst.Finish()
+			if err != nil {
 				return err
 			}
 			expectedSSTs = append(expectedSSTs, sstFile.Data())
@@ -4012,7 +4019,7 @@ func TestStoreRangeMergeRaftSnapshot(t *testing.T) {
 			EndKey:   roachpb.RKey(keyEnd),
 		}
 		if err := storage.ClearRangeWithHeuristic(
-			ctx, receivingEng, &sst, desc.StartKey.AsRawKey(), desc.EndKey.AsRawKey(), 64,
+			ctx, receivingEng, &sst, desc.StartKey.AsRawKey(), desc.EndKey.AsRawKey(), 64, 8,
 		); err != nil {
 			return err
 		}
@@ -4135,7 +4142,7 @@ func TestStoreRangeMergeRaftSnapshot(t *testing.T) {
 		index := repl.GetLastIndex()
 		truncArgs := &kvpb.TruncateLogRequest{
 			RequestHeader: kvpb.RequestHeader{Key: keyA},
-			Index:         index + 1,
+			Index:         index,
 			RangeID:       repl.RangeID,
 		}
 		if _, err := kv.SendWrapped(ctx, distSender, truncArgs); err != nil {
@@ -4642,7 +4649,7 @@ func TestMergeQueue(t *testing.T) {
 
 					clearRange(t, lhsStartKey, rhsEndKey)
 					setSplitObjective(secondSplitObjective)
-					if !grunning.Supported {
+					if !grunning.Supported() {
 						// CPU isn't a supported split objective when grunning isn't
 						// supported. Switching the dimension will have no effect, as the
 						// objective gets overridden in such cases to always be QPS.
@@ -5250,7 +5257,7 @@ func setupClusterWithSubsumedRange(
 		testutils.SucceedsSoon(t, func() error {
 			var err error
 			newDesc, err = tc.AddVoters(desc.StartKey.AsRawKey(), tc.Target(1))
-			if kvtestutils.IsExpectedRelocateError(err) {
+			if kv.IsExpectedRelocateError(err) {
 				// Retry.
 				return errors.Wrap(err, "ChangeReplicas received error")
 			}

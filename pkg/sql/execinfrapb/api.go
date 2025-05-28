@@ -83,8 +83,3 @@ func (m *ChangeFrontierSpec) User() username.SQLUsername {
 func (m *GenerativeSplitAndScatterSpec) User() username.SQLUsername {
 	return m.UserProto.Decode()
 }
-
-// User accesses the user field.
-func (m *CompactBackupsSpec) User() username.SQLUsername {
-	return m.UserProto.Decode()
-}

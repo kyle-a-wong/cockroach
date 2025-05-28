@@ -43,7 +43,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/pgwire/pgnotice"
 	"github.com/cockroachdb/cockroach/pkg/sql/privilege"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/catconstants"
-	"github.com/cockroachdb/cockroach/pkg/sql/sem/idxtype"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/util"
 	"github.com/cockroachdb/cockroach/pkg/util/errorutil/unimplemented"
@@ -69,7 +68,9 @@ const (
 	mysqlOutfileEnclose  = "fields_enclosed_by"
 	mysqlOutfileEscape   = "fields_escaped_by"
 
+	importOptionSSTSize          = "sstsize"
 	importOptionDecompress       = "decompress"
+	importOptionOversample       = "oversample"
 	importOptionSkipFKs          = "skip_foreign_keys"
 	importOptionDisableGlobMatch = "disable_glob_matching"
 	importOptionSaveRejected     = "experimental_save_rejected"
@@ -98,9 +99,9 @@ const (
 	pgDumpUnsupportedSchemaStmtLog = "unsupported_schema_stmts"
 	pgDumpUnsupportedDataStmtLog   = "unsupported_data_stmts"
 
-	// statusImportBundleParseSchema indicates to the user that a bundle format
+	// RunningStatusImportBundleParseSchema indicates to the user that a bundle format
 	// schema is being parsed
-	statusImportBundleParseSchema jobs.StatusMessage = "parsing schema on Import Bundle"
+	runningStatusImportBundleParseSchema jobs.RunningStatus = "parsing schema on Import Bundle"
 )
 
 var importOptionExpectValues = map[string]exprutil.KVStringOptValidate{
@@ -117,7 +118,9 @@ var importOptionExpectValues = map[string]exprutil.KVStringOptValidate{
 	mysqlOutfileEnclose:  exprutil.KVStringOptRequireValue,
 	mysqlOutfileEscape:   exprutil.KVStringOptRequireValue,
 
+	importOptionSSTSize:      exprutil.KVStringOptRequireValue,
 	importOptionDecompress:   exprutil.KVStringOptRequireValue,
+	importOptionOversample:   exprutil.KVStringOptRequireValue,
 	importOptionSaveRejected: exprutil.KVStringOptRequireNoValue,
 
 	importOptionSkipFKs:          exprutil.KVStringOptRequireNoValue,
@@ -157,8 +160,8 @@ func makeStringSet(opts ...string) map[string]struct{} {
 
 // Options common to all formats.
 var allowedCommonOptions = makeStringSet(
-	importOptionDecompress, importOptionSaveRejected, importOptionDisableGlobMatch, importOptionDetached,
-)
+	importOptionSSTSize, importOptionDecompress, importOptionOversample,
+	importOptionSaveRejected, importOptionDisableGlobMatch, importOptionDetached)
 
 // Format specific allowed options.
 var avroAllowedOptions = makeStringSet(
@@ -748,6 +751,26 @@ func importPlanHook(
 			return unimplemented.Newf("import.format", "unsupported import format: %q", importStmt.FileFormat)
 		}
 
+		// sstSize, if 0, will be set to an appropriate default by the specific
+		// implementation (local or distributed) since each has different optimal
+		// settings.
+		var sstSize int64
+		if override, ok := opts[importOptionSSTSize]; ok {
+			sz, err := humanizeutil.ParseBytes(override)
+			if err != nil {
+				return err
+			}
+			sstSize = sz
+		}
+		var oversample int64
+		if override, ok := opts[importOptionOversample]; ok {
+			os, err := strconv.ParseInt(override, 10, 64)
+			if err != nil {
+				return err
+			}
+			oversample = os
+		}
+
 		var skipFKs bool
 		if _, ok := opts[importOptionSkipFKs]; ok {
 			skipFKs = true
@@ -789,29 +812,9 @@ func importPlanHook(
 			if err != nil {
 				return err
 			}
-			// Check if the table has any vector indexes
-			for _, idx := range found.NonDropIndexes() {
-				if idx.GetType() == idxtype.VECTOR {
-					return unimplemented.NewWithIssueDetail(145227, "import.vector-index",
-						"IMPORT INTO is not supported for tables with vector indexes")
-				}
-			}
 
 			if len(found.LDRJobIDs) > 0 {
 				return errors.Newf("cannot run an import on table %s which is apart of a Logical Data Replication stream", table)
-			}
-
-			// Import into an RLS table is blocked, unless this is the admin. It is
-			// allowed for admins since they are exempt from RLS policies and have
-			// unrestricted read/write access.
-			if found.IsRowLevelSecurityEnabled() {
-				admin, err := p.HasAdminRole(ctx)
-				if err != nil {
-					return err
-				} else if !admin {
-					return pgerror.New(pgcode.FeatureNotSupported,
-						"IMPORT INTO not supported with row-level security for non-admin users")
-				}
 			}
 
 			// Validate target columns.
@@ -943,6 +946,8 @@ func importPlanHook(
 			ParentID:              db.GetID(),
 			Tables:                tableDetails,
 			Types:                 typeDetails,
+			SSTSize:               sstSize,
+			Oversample:            oversample,
 			SkipFKs:               skipFKs,
 			ParseBundleSchema:     importStmt.Bundle,
 			DefaultIntSize:        p.SessionData().DefaultIntSize,

@@ -13,7 +13,6 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
-	"github.com/cockroachdb/cockroach/pkg/storage/mvccencoding"
 	"github.com/cockroachdb/cockroach/pkg/util/metamorphic"
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/pebble"
@@ -171,7 +170,7 @@ var WithValueBlocksDisabled SSTWriterOption = func(opts *sstable.WriterOptions) 
 // WithCompressionFromClusterSetting sets the compression algorithm for an
 // SSTable based on the value of the given cluster setting.
 func WithCompressionFromClusterSetting(
-	ctx context.Context, cs *cluster.Settings, setting *settings.EnumSetting[CompressionAlgorithm],
+	ctx context.Context, cs *cluster.Settings, setting *settings.EnumSetting[compressionAlgorithm],
 ) SSTWriterOption {
 	return func(opts *sstable.WriterOptions) {
 		opts.Compression = getCompressionAlgorithm(ctx, cs, setting)
@@ -264,7 +263,7 @@ func (fw *SSTWriter) PutRawMVCCRangeKey(rangeKey MVCCRangeKey, value []byte) err
 		return err
 	}
 	return fw.PutEngineRangeKey(
-		rangeKey.StartKey, rangeKey.EndKey, mvccencoding.EncodeMVCCTimestampSuffix(rangeKey.Timestamp), value)
+		rangeKey.StartKey, rangeKey.EndKey, EncodeMVCCTimestampSuffix(rangeKey.Timestamp), value)
 }
 
 // ClearMVCCRangeKey implements the Writer interface.
@@ -280,7 +279,7 @@ func (fw *SSTWriter) ClearMVCCRangeKey(rangeKey MVCCRangeKey) error {
 			rangeKey.EncodedTimestampSuffix)
 	}
 	return fw.ClearEngineRangeKey(rangeKey.StartKey, rangeKey.EndKey,
-		mvccencoding.EncodeMVCCTimestampSuffix(rangeKey.Timestamp))
+		EncodeMVCCTimestampSuffix(rangeKey.Timestamp))
 }
 
 // PutEngineRangeKey implements the Writer interface.
@@ -355,7 +354,7 @@ func (fw *SSTWriter) PutInternalPointKey(key *pebble.InternalKey, value []byte) 
 		return errors.New("cannot decode engine key")
 	}
 	fw.DataSize += int64(len(ek.Key)) + int64(len(value))
-	return fw.fw.Raw().Add(*key, value, false /* forceObsolete */)
+	return fw.fw.Raw().AddWithForceObsolete(*key, value, false /* forceObsolete */)
 }
 
 // clearRange clears all point keys in the given range by dropping a Pebble

@@ -20,6 +20,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/jobs/jobspb"
 	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/protectedts"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/server/telemetry"
@@ -95,17 +96,8 @@ var _ jobs.Resumer = &importResumer{}
 var processorsPerNode = settings.RegisterIntSetting(
 	settings.ApplicationLevel,
 	"bulkio.import.processors_per_node",
-	"number of input processors to run on each sql instance",
-	1,
+	"number of input processors to run on each sql instance", 1,
 	settings.PositiveInt,
-)
-
-var initialSplitsPerProcessor = settings.RegisterIntSetting(
-	settings.ApplicationLevel,
-	"bulkio.import.initial_splits_per_processor",
-	"number of initial splits each import processor with enough data will create",
-	3,
-	settings.NonNegativeInt,
 )
 
 var performConstraintValidation = settings.RegisterBoolSetting(
@@ -225,7 +217,7 @@ func (r *importResumer) Resume(ctx context.Context, execCtx interface{}) error {
 
 			// Re-initialize details after prepare step.
 			details = r.job.Details().(jobspb.ImportDetails)
-			emitImportJobEvent(ctx, p, jobs.StateRunning, r.job)
+			emitImportJobEvent(ctx, p, jobs.StatusRunning, r.job)
 		}
 
 		// Create a mapping from schemaID to schemaName.
@@ -314,12 +306,9 @@ func (r *importResumer) Resume(ctx context.Context, execCtx interface{}) error {
 	}
 
 	procsPerNode := int(processorsPerNode.Get(&p.ExecCfg().Settings.SV))
-	initialSplitsPerProc := int(initialSplitsPerProcessor.Get(&p.ExecCfg().Settings.SV))
 
-	res, err := ingestWithRetry(
-		ctx, p, r.job, tables, typeDescs, files, format, details.Walltime,
-		r.testingKnobs, procsPerNode, initialSplitsPerProc,
-	)
+	res, err := ingestWithRetry(ctx, p, r.job, tables, typeDescs, files, format, details.Walltime,
+		r.testingKnobs, procsPerNode)
 	if err != nil {
 		return err
 	}
@@ -368,7 +357,21 @@ func (r *importResumer) Resume(ctx context.Context, execCtx interface{}) error {
 		return err
 	}
 
-	emitImportJobEvent(ctx, p, jobs.StateSucceeded, r.job)
+	// As of 21.2 we do not write a protected timestamp record during IMPORT INTO.
+	// In case of a mixed version cluster with 21.1 and 21.2 nodes, it is possible
+	// that the job was planned on an older node and then resumed on a 21.2 node.
+	// Thus, we still need to clear the timestamp record that was written when the
+	// IMPORT INTO was planned on the older node.
+	//
+	// TODO(adityamaru): Remove in 22.1.
+	if err := p.ExecCfg().InternalDB.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
+		return r.releaseProtectedTimestamp(
+			ctx, p.ExecCfg().ProtectedTimestampProvider.WithTxn(txn),
+		)
+	}); err != nil {
+		log.Errorf(ctx, "failed to release protected timestamp: %v", err)
+	}
+	emitImportJobEvent(ctx, p, jobs.StatusSucceeded, r.job)
 
 	addToFileFormatTelemetry(details.Format.Format.String(), "succeeded")
 	telemetry.CountBucketed("import.rows", r.res.Rows)
@@ -785,7 +788,7 @@ func (r *importResumer) parseBundleSchemaIfNeeded(ctx context.Context, phs inter
 		ctx, span = tracing.ChildSpan(ctx, "import-parsing-bundle-schema")
 		defer span.Finish()
 
-		if err := r.job.NoTxn().UpdateStatusMessage(ctx, statusImportBundleParseSchema); err != nil {
+		if err := r.job.NoTxn().RunningStatus(ctx, runningStatusImportBundleParseSchema); err != nil {
 			return errors.Wrapf(err, "failed to update running status of job %d", errors.Safe(r.job.ID()))
 		}
 
@@ -1143,8 +1146,8 @@ func (r *importResumer) checkVirtualConstraints(
 		desc.SetPublic()
 
 		if sql.HasVirtualUniqueConstraints(desc) {
-			status := jobs.StatusMessage(fmt.Sprintf("re-validating %s", desc.GetName()))
-			if err := job.NoTxn().UpdateStatusMessage(ctx, status); err != nil {
+			status := jobs.RunningStatus(fmt.Sprintf("re-validating %s", desc.GetName()))
+			if err := job.NoTxn().RunningStatus(ctx, status); err != nil {
 				return errors.Wrapf(err, "failed to update running status of job %d", errors.Safe(job.ID()))
 			}
 		}
@@ -1284,7 +1287,6 @@ func ingestWithRetry(
 	walltime int64,
 	testingKnobs importTestingKnobs,
 	procsPerNode int,
-	initialSplitsPerProc int,
 ) (kvpb.BulkOpSummary, error) {
 	ctx, sp := tracing.ChildSpan(ctx, "importer.ingestWithRetry")
 	defer sp.Finish()
@@ -1306,7 +1308,7 @@ func ingestWithRetry(
 	for r := retry.StartWithCtx(ctx, retryOpts); r.Next(); {
 		for {
 			res, err = distImport(
-				ctx, execCtx, job, tables, typeDescs, from, format, walltime, testingKnobs, procsPerNode, initialSplitsPerProc,
+				ctx, execCtx, job, tables, typeDescs, from, format, walltime, testingKnobs, procsPerNode,
 			)
 			// If we got a re-planning error, then do at least one more attempt
 			// regardless of the retry duration.
@@ -1378,7 +1380,7 @@ func ingestWithRetry(
 
 // emitImportJobEvent emits an import job event to the event log.
 func emitImportJobEvent(
-	ctx context.Context, p sql.JobExecContext, status jobs.State, job *jobs.Job,
+	ctx context.Context, p sql.JobExecContext, status jobs.Status, job *jobs.Job,
 ) {
 	var importEvent eventpb.Import
 	if err := p.ExecCfg().InternalDB.Txn(ctx, func(ctx context.Context, txn isql.Txn) error {
@@ -1470,7 +1472,7 @@ func (r *importResumer) OnFailOrCancel(
 	p := execCtx.(sql.JobExecContext)
 
 	// Emit to the event log that the job has started reverting.
-	emitImportJobEvent(ctx, p, jobs.StateReverting, r.job)
+	emitImportJobEvent(ctx, p, jobs.StatusReverting, r.job)
 
 	// TODO(sql-exp): increase telemetry count for import.total.failed and
 	// import.duration-sec.failed.
@@ -1509,7 +1511,12 @@ func (r *importResumer) OnFailOrCancel(
 		// schema before dropping the descriptor.
 		var err error
 		jobsToRunAfterTxnCommit, err = r.dropSchemas(ctx, txn, descsCol, cfg, p)
-		return err
+		if err != nil {
+			return err
+		}
+		// TODO(adityamaru): Remove in 22.1 since we do not write PTS records during
+		// IMPORT INTO from 21.2+.
+		return r.releaseProtectedTimestamp(ctx, cfg.ProtectedTimestampProvider.WithTxn(txn))
 	}); err != nil {
 		return err
 	}
@@ -1524,7 +1531,7 @@ func (r *importResumer) OnFailOrCancel(
 	}
 
 	// Emit to the event log that the job has completed reverting.
-	emitImportJobEvent(ctx, p, jobs.StateFailed, r.job)
+	emitImportJobEvent(ctx, p, jobs.StatusFailed, r.job)
 
 	return nil
 }
@@ -1776,12 +1783,31 @@ func (r *importResumer) dropSchemas(
 	return queuedJob, nil
 }
 
+func (r *importResumer) releaseProtectedTimestamp(
+	ctx context.Context, pts protectedts.Storage,
+) error {
+	details := r.job.Details().(jobspb.ImportDetails)
+	ptsID := details.ProtectedTimestampRecord
+	// If the job doesn't have a protected timestamp then there's nothing to do.
+	if ptsID == nil {
+		return nil
+	}
+	err := pts.Release(ctx, *ptsID)
+	if errors.Is(err, protectedts.ErrNotExists) {
+		// No reason to return an error which might cause problems if it doesn't
+		// seem to exist.
+		log.Warningf(ctx, "failed to release protected which seems not to exist: %v", err)
+		err = nil
+	}
+	return err
+}
+
 // ReportResults implements JobResultsReporter interface.
 func (r *importResumer) ReportResults(ctx context.Context, resultsCh chan<- tree.Datums) error {
 	select {
 	case resultsCh <- tree.Datums{
 		tree.NewDInt(tree.DInt(r.job.ID())),
-		tree.NewDString(string(jobs.StateSucceeded)),
+		tree.NewDString(string(jobs.StatusSucceeded)),
 		tree.NewDFloat(tree.DFloat(1.0)),
 		tree.NewDInt(tree.DInt(r.res.Rows)),
 		tree.NewDInt(tree.DInt(r.res.IndexEntries)),

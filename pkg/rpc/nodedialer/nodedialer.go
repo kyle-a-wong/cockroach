@@ -25,7 +25,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/tracing"
 	"github.com/cockroachdb/errors"
 	"google.golang.org/grpc"
-	"storj.io/drpc"
+	"storj.io/drpc/drpcpool"
 )
 
 // An AddressResolver translates NodeIDs into addresses.
@@ -187,7 +187,7 @@ func (n *Dialer) dial(
 	locality roachpb.Locality,
 	checkBreaker bool,
 	class rpc.ConnectionClass,
-) (*grpc.ClientConn, *rpc.BatchStreamPool, drpc.Conn, *rpc.DRPCBatchStreamPool, error) {
+) (*grpc.ClientConn, *rpc.BatchStreamPool, drpcpool.Conn, *rpc.DRPCBatchStreamPool, error) {
 	const ctxWrapMsg = "dial"
 	// Don't trip the breaker if we're already canceled.
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -335,8 +335,8 @@ func (c *baseInternalClient) MuxRangeFeed(
 var batchStreamPoolingEnabled = settings.RegisterBoolSetting(
 	settings.ApplicationLevel,
 	"rpc.batch_stream_pool.enabled",
-	"if true, use pooled gRPC streams to execute Batch RPCs",
-	metamorphic.ConstantWithTestBool("rpc.batch_stream_pool.enabled", true),
+	"if true, use pooled gRPC streams to execute Batch RPCs (experimental)",
+	metamorphic.ConstantWithTestBool("rpc.batch_stream_pool.enabled", false),
 )
 
 func shouldUseBatchStreamPoolClient(ctx context.Context, st *cluster.Settings) bool {
@@ -397,7 +397,7 @@ func maybeWrapInTracingClient(
 	ctx context.Context, client rpc.RestrictedInternalClient,
 ) rpc.RestrictedInternalClient {
 	sp := tracing.SpanFromContext(ctx)
-	if sp != nil {
+	if sp != nil && !sp.IsNoop() {
 		return &tracingInternalClient{RestrictedInternalClient: client}
 	}
 	return client
@@ -408,7 +408,7 @@ func (c *tracingInternalClient) Batch(
 	ctx context.Context, ba *kvpb.BatchRequest, opts ...grpc.CallOption,
 ) (*kvpb.BatchResponse, error) {
 	sp := tracing.SpanFromContext(ctx)
-	if sp != nil {
+	if sp != nil && !sp.IsNoop() {
 		ba = ba.ShallowCopy()
 		ba.TraceInfo = sp.Meta().ToProto()
 	}

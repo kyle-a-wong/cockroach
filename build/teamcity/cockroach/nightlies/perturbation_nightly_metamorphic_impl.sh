@@ -33,3 +33,4 @@ build/teamcity-roachtest-invoke.sh \
   --cpu-quota="${CPUQUOTA}" \
   --use-spot="${USE_SPOT:-auto}" \
   --slack-token="${SLACK_TOKEN}" \
+  --side-eye-token="${SIDE_EYE_API_TOKEN}"
