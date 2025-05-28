@@ -221,7 +221,7 @@ func (env *ddEnv) lookupServerWithSkip(nodeID roachpb.NodeID, skip int) *ddServe
 	return nil
 }
 
-func (env *ddEnv) dial(srv *ddServer, class ConnectionClass) *GRPCConnection {
+func (env *ddEnv) dial(srv *ddServer, class ConnectionClass) *Connection {
 	// TODO(baptist): Fix the locality for tests.
 	return env.client.GRPCDialNode(srv.addr, srv.nodeID, roachpb.Locality{}, class)
 }
@@ -323,8 +323,6 @@ func scanClass(t *testing.T, d *datadriven.TestData) ConnectionClass {
 		return SystemClass
 	case "rf":
 		return RangefeedClass
-	case "raft":
-		return RaftClass
 	default:
 		t.Fatalf("no such class: %s", s)
 	}

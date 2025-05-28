@@ -8,11 +8,13 @@ package kvstorage
 import (
 	"context"
 
+	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverpb"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/logstore"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/rditer"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/stateloader"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/storage"
+	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/errors"
 )
 
@@ -29,6 +31,11 @@ const (
 	// perhaps we should fix Pebble to handle large numbers of range tombstones in
 	// an sstable better.
 	ClearRangeThresholdPointKeys = 64
+
+	// ClearRangeThresholdRangeKeys is the threshold (as number of range keys)
+	// beyond which we'll clear range data using a single RANGEKEYDEL across the
+	// span rather than clearing individual range keys.
+	ClearRangeThresholdRangeKeys = 8
 )
 
 // ClearRangeDataOptions specify which parts of a Replica are to be destroyed.
@@ -59,11 +66,7 @@ type ClearRangeDataOptions struct {
 // "CRDB Range" and "storage.ClearRange" context in the setting of this method could
 // be confusing.
 func ClearRangeData(
-	ctx context.Context,
-	rangeID roachpb.RangeID,
-	reader storage.Reader,
-	writer storage.Writer,
-	opts ClearRangeDataOptions,
+	rangeID roachpb.RangeID, reader storage.Reader, writer storage.Writer, opts ClearRangeDataOptions,
 ) error {
 	keySpans := rditer.Select(rangeID, rditer.SelectOpts{
 		ReplicatedBySpan:      opts.ClearReplicatedBySpan,
@@ -71,14 +74,14 @@ func ClearRangeData(
 		UnreplicatedByRangeID: opts.ClearUnreplicatedByRangeID,
 	})
 
-	pointKeyThreshold := ClearRangeThresholdPointKeys
+	pointKeyThreshold, rangeKeyThreshold := ClearRangeThresholdPointKeys, ClearRangeThresholdRangeKeys
 	if opts.MustUseClearRange {
-		pointKeyThreshold = 1
+		pointKeyThreshold, rangeKeyThreshold = 1, 1
 	}
 
 	for _, keySpan := range keySpans {
 		if err := storage.ClearRangeWithHeuristic(
-			ctx, reader, writer, keySpan.Key, keySpan.EndKey, pointKeyThreshold,
+			reader, writer, keySpan.Key, keySpan.EndKey, pointKeyThreshold, rangeKeyThreshold,
 		); err != nil {
 			return err
 		}
@@ -102,29 +105,44 @@ func DestroyReplica(
 	nextReplicaID roachpb.ReplicaID,
 	opts ClearRangeDataOptions,
 ) error {
-	diskReplicaID, err := stateloader.Make(rangeID).LoadRaftReplicaID(ctx, reader)
+	diskReplicaID, err := logstore.NewStateLoader(rangeID).LoadRaftReplicaID(ctx, reader)
 	if err != nil {
 		return err
 	}
 	if diskReplicaID.ReplicaID >= nextReplicaID {
 		return errors.AssertionFailedf("replica r%d/%d must not survive its own tombstone", rangeID, diskReplicaID)
 	}
-	if err := ClearRangeData(ctx, rangeID, reader, writer, opts); err != nil {
+	if err := ClearRangeData(rangeID, reader, writer, opts); err != nil {
 		return err
 	}
 
-	// Save a tombstone to ensure that replica IDs never get reused. Assert that
-	// the provided tombstone moves the existing one strictly forward. Failure to
-	// do so indicates that something is going wrong in the replica lifecycle.
-	sl := stateloader.Make(rangeID)
-	ts, err := sl.LoadRangeTombstone(ctx, reader)
-	if err != nil {
-		return err
-	} else if ts.NextReplicaID >= nextReplicaID {
-		return errors.AssertionFailedf(
-			"cannot rewind tombstone from %d to %d", ts.NextReplicaID, nextReplicaID)
+	// Save a tombstone to ensure that replica IDs never get reused.
+	//
+	// TODO(tbg): put this on `stateloader.StateLoader` and consolidate the
+	// other read of the range tombstone key (in uninited replica creation
+	// as well).
+
+	tombstoneKey := keys.RangeTombstoneKey(rangeID)
+
+	// Assert that the provided tombstone moves the existing one strictly forward.
+	// Failure to do so indicates that something is going wrong in the replica
+	// lifecycle.
+	{
+		var tombstone kvserverpb.RangeTombstone
+		if _, err := storage.MVCCGetProto(
+			ctx, reader, tombstoneKey, hlc.Timestamp{}, &tombstone, storage.MVCCGetOptions{},
+		); err != nil {
+			return err
+		}
+		if tombstone.NextReplicaID >= nextReplicaID {
+			return errors.AssertionFailedf(
+				"cannot rewind tombstone from %d to %d", tombstone.NextReplicaID, nextReplicaID,
+			)
+		}
 	}
-	return sl.SetRangeTombstone(ctx, writer, kvserverpb.RangeTombstone{
-		NextReplicaID: nextReplicaID, // NB: nextReplicaID > 0
-	})
+
+	tombstone := kvserverpb.RangeTombstone{NextReplicaID: nextReplicaID}
+	// "Blind" because ms == nil and timestamp.IsEmpty().
+	return storage.MVCCBlindPutProto(ctx, writer, tombstoneKey,
+		hlc.Timestamp{}, &tombstone, storage.MVCCWriteOptions{})
 }
