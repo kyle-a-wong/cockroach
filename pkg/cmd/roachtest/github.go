@@ -14,9 +14,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/bazci/githubpost/issues"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestflags"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/tests"
 	"github.com/cockroachdb/cockroach/pkg/internal/team"
 	rperrors "github.com/cockroachdb/cockroach/pkg/roachprod/errors"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
@@ -174,6 +174,7 @@ func (g *githubIssues) createPostRequest(
 	spec *registry.TestSpec,
 	failures []failure,
 	message string,
+	sideEyeTimeoutSnapshotURL string,
 	runtimeAssertionsBuild bool,
 	coverageBuild bool,
 	params map[string]string,
@@ -286,6 +287,11 @@ func (g *githubIssues) createPostRequest(
 				"then this failure is likely due to an assertion violation or (assertion) timeout.")
 	}
 
+	sideEyeMsg := ""
+	if sideEyeTimeoutSnapshotURL != "" {
+		sideEyeMsg = "A Side-Eye cluster snapshot was captured on timeout: "
+	}
+
 	return issues.PostRequest{
 		MentionOnCreate: mention,
 		ProjectColumnID: projColID,
@@ -297,13 +303,19 @@ func (g *githubIssues) createPostRequest(
 		TopLevelNotes:           topLevelNotes,
 		Message:                 issueMessage,
 		Artifacts:               artifacts,
+		SideEyeSnapshotMsg:      sideEyeMsg,
+		SideEyeSnapshotURL:      sideEyeTimeoutSnapshotURL,
 		ExtraParams:             params,
 		HelpCommand:             generateHelpCommand(testName, issueClusterName, roachtestflags.Cloud, start, end),
 	}, nil
 }
 
 func (g *githubIssues) MaybePost(
-	t *testImpl, l *logger.Logger, message string, params map[string]string,
+	t *testImpl,
+	l *logger.Logger,
+	message string,
+	sideEyeTimeoutSnapshotURL string,
+	params map[string]string,
 ) (*issues.TestFailureIssue, error) {
 	skipReason := g.shouldPost(t)
 	if skipReason != "" {
@@ -313,8 +325,8 @@ func (g *githubIssues) MaybePost(
 
 	postRequest, err := g.createPostRequest(
 		t.Name(), t.start, t.end, t.spec, t.failures(),
-		message,
-		roachtestutil.UsingRuntimeAssertions(t), t.goCoverEnabled, params,
+		message, sideEyeTimeoutSnapshotURL,
+		tests.UsingRuntimeAssertions(t), t.goCoverEnabled, params,
 	)
 
 	if err != nil {
