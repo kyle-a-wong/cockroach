@@ -7,6 +7,7 @@ package contention
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/appstatspb"
 	"github.com/cockroachdb/cockroach/pkg/sql/contentionpb"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
+	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/cockroach/pkg/util/uuid"
 	"github.com/cockroachdb/errors"
 )
@@ -211,8 +213,10 @@ func (q *resolverQueueImpl) resolveLocked(ctx context.Context) error {
 			if initialRetryBudget < initialRetryBudgetDueToWaitingTxnID {
 				initialRetryBudget = initialRetryBudgetDueToWaitingTxnID
 			}
-
+			fmt.Println("Resolving locked")
 			if needToRetryDueToBlockingTxnID || needToRetryDueToWaitingTxnID {
+				fmt.Printf("[%s] need to retry. event.WaitingTxnID=%s needToRetryDueToBlockingTxnID=%t, needToRetryDueToWaitingTxnID=%t \n",
+					timeutil.Now(), event.WaitingTxnID, needToRetryDueToBlockingTxnID, needToRetryDueToWaitingTxnID)
 				q.maybeRequeueEventForRetryLocked(event, initialRetryBudget)
 			} else {
 				q.mu.resolvedEvents = append(q.mu.resolvedEvents, event)
@@ -246,22 +250,27 @@ func maybeUpdateTxnFingerprintID(
 	}
 
 	if resolvedTxnIDs == nil {
+		fmt.Println("retryBudgetForRPCFailure")
 		return true /* needToRetry */, retryBudgetForRPCFailure
 	}
 
 	if _, ok := inProgressTxnIDs[txnID]; ok {
+		fmt.Println("retryBudgetForTxnInProgress")
 		return true /* needToRetry */, retryBudgetForTxnInProgress
 	}
 
 	if inProgressTxnIDs == nil {
+		fmt.Println("retryBudgetForRPCFailure")
 		return true /* needToRetry */, retryBudgetForRPCFailure
 	}
 
 	if txnFingerprintID, ok := resolvedTxnIDs[txnID]; ok {
+		fmt.Println("No retry needed, txnID resolved")
 		*existingTxnFingerprintID = txnFingerprintID
 		return false /* needToRetry */, 0 /* initialRetryBudget */
 	}
 
+	fmt.Println("retryBudgetForMissingResult")
 	return true /* needToRetry */, retryBudgetForMissingResult
 }
 
